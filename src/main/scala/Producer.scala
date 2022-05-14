@@ -15,19 +15,27 @@ class ProducerMessageGeneratingThread(sock: Socket, os: PrintStream) extends Thr
   {
     println("Messages generating thread - started.")
     Thread.sleep(2000)
-    var i = 0
-    while(i < 4){
+    var x = 0
+    while(true){
+      x+=1
+
       var topic = ""
-      var value = 22
-      if (i%2 == 0){
+      var value = 20
+      val r = scala.util.Random.nextFloat()
+
+      if (r>0.5){
         topic = "temperature"
-        value += i/2
+        value += (5*r).toInt
       }else{
         topic = "humidity"
-        value += 30 + i
+        value += 20 + (15*r).toInt
       }
-      val msg = new Message(UUID.randomUUID().toString, topic, value)
-      println("Sending:" + msg.id)
+      var priority = 0
+      if(r>0.25 && r<0.75){
+        priority += 1
+      }
+      val msg = new Message(x.toString, priority, topic, value)
+      println("priority " + msg.priority + " | "+ msg.topic + " " + msg.value)
       val stream: ByteArrayOutputStream = new ByteArrayOutputStream()
       val oos = new ObjectOutputStream(stream)
       oos.writeObject(msg)
@@ -38,7 +46,6 @@ class ProducerMessageGeneratingThread(sock: Socket, os: PrintStream) extends Thr
       )
       os.println(retv)
       Thread.sleep(1000)
-      i += 1
     }
     os.println("quit")
     sock.close()
@@ -52,12 +59,10 @@ class ProducerMessagesReceiveThread(is: BufferedReader) extends Thread
   override def run()
   {
     println("Messages receiving thread - started.")
-    var i = 0
-    while(i < 3){
+    while(true){
       if(is.ready){
         val output = is.readLine
         println("Received: " + output)
-        i += 1
       }
 
       Thread.sleep(100)

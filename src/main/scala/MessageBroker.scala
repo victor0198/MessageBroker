@@ -23,8 +23,8 @@ class AcceptConnectionsThread(var ss: ServerSocket, producers: ConcurrentLinkedQ
         producers.add(Producer(sock, is, os, uuid))
         println("Producer connected")
       }else if (clientType.equals("consumer")){
-        val topic = is.readLine
-        consumers.add(Consumer(sock, is, os, uuid, topic))
+        val topics = is.readLine
+        consumers.add(Consumer(sock, is, os, uuid, topics))
         println("Consumer connected")
       }
 
@@ -50,17 +50,14 @@ class AcceptMessagesThread(producers: ConcurrentLinkedQueue[Producer], consumers
             val bytes = Base64.getDecoder.decode(input.getBytes(StandardCharsets.UTF_8))
 
             val ois = new ObjectInputStream(new ByteArrayInputStream(bytes))
-            val msgo = ois.readObject match {
-              case msg: Message => msg
+            ois.readObject match {
+              case msg: Message =>
+                println("Message: id:" + msg.id + ", topic:" + msg.topic + ", value:" + msg.value)
+                messages.add(msg)
+                producer.ps.println("SUCCESS")
               case _ => throw new Exception("Got not a message from client")
             }
             ois.close()
-            println("Message: id:" + msgo.id + ", topic:" + msgo.topic + ", value:" + msgo.value)
-            messages.add(msgo)
-
-            producers.forEach((toUser) => {
-              toUser.ps.println("SUCCESS")
-            })
           }
         }
       })
@@ -72,6 +69,21 @@ class AcceptMessagesThread(producers: ConcurrentLinkedQueue[Producer], consumers
             consumer.sock.close()
             consumers.remove(consumer)
 
+          }else{
+            val bytes = Base64.getDecoder.decode(input.getBytes(StandardCharsets.UTF_8))
+
+            val ois = new ObjectInputStream(new ByteArrayInputStream(bytes))
+            ois.readObject match {
+              case confirm: Confirmation =>
+                messages.forEach((message) => {
+                  if(message.id.equals(confirm.id)){
+                    println("Confirmed:" + message.id)
+                    messages.remove(message)
+                  }
+                })
+              case _ => throw new Exception("Got not a message from client")
+            }
+            ois.close()
           }
         }
       })
@@ -85,11 +97,28 @@ class MessagesSendingThread(messages: ConcurrentLinkedQueue[Message], consumers:
 {
   override def run()
   {
-    println("Messages accepting thread - started.")
-    while(true){
+    println("Messages sending thread - started.")
+    while(true) {
+      var sendWithPriority = 2
+      var prioritySet = false
+      while (!prioritySet) {
+        messages.forEach((msg) => {
+          if (msg.priority == sendWithPriority){
+            prioritySet = true
+          }
+        })
+
+        if(!prioritySet)
+          sendWithPriority -= 1
+
+        if(sendWithPriority == 0)
+          prioritySet = true
+      }
+
+      var messageSent = false
       messages.forEach((msg) => {
 
-        if(consumers.size() > 0 ){
+        if(!messageSent && consumers.size() > 0 && msg.priority == sendWithPriority){
 
           val stream: ByteArrayOutputStream = new ByteArrayOutputStream()
           val oos = new ObjectOutputStream(stream)
@@ -101,15 +130,18 @@ class MessagesSendingThread(messages: ConcurrentLinkedQueue[Message], consumers:
           )
 
           consumers.forEach((toConsumer) => {
-            if(toConsumer.topic.equals(msg.topic)) {
-              println("Sending:" + msg.topic + " " + msg.value)
-              toConsumer.ps.println(retv)
-              messages.remove(msg)
-            }
+            toConsumer.topics.split(",").foreach(
+              (topic)=> {
+                if(topic.equals(msg.topic)) {
+                  println("Sending  :" + msg.id + "|" + msg.topic + " " + msg.value)
+                  Thread.sleep(100)
+                  toConsumer.ps.println(retv)
+                  messageSent = true
+                }
+              }
+            )
           })
-
         }
-
       })
 
       Thread.sleep(100)
@@ -122,7 +154,7 @@ class DurableMessagesThread(messages: ConcurrentLinkedQueue[Message]) extends Th
 {
   override def run()
   {
-    println("Messages accepting thread - started.")
+    println("Messages saving thread - started.")
     while(true){
 
 //      val OIS = new ObjectInputStream(new BufferedInputStream(new FileInputStream("messages.bin")))
