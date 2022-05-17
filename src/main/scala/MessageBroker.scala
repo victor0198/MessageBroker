@@ -18,15 +18,24 @@ class AcceptConnectionsThread(var ss: ServerSocket, producers: ConcurrentLinkedQ
       val uuid = UUID.randomUUID().toString
       println("Client connected: " + uuid.substring(0,4))
 
-      val clientType = is.readLine
-      if(clientType.equals("producer")){
-        producers.add(Producer(sock, is, os, uuid))
-        println("Producer connected")
-      }else if (clientType.equals("consumer")){
-        val topics = is.readLine
-        consumers.add(Consumer(sock, is, os, uuid, topics))
-        println("Consumer connected")
+      val connection = is.readLine
+      val bytes = Base64.getDecoder.decode(connection.getBytes(StandardCharsets.UTF_8))
+
+      val ois = new ObjectInputStream(new ByteArrayInputStream(bytes))
+      ois.readObject match {
+        case con: Connection =>
+          println("Message: client" + con.subject + ", topics:" + con.topics)
+          if(con.subject.equals("producer")){
+            producers.add(Producer(sock, is, os, uuid))
+            println("Producer connected")
+          }else if (con.subject.equals("consumer")){
+            consumers.add(Consumer(sock, is, os, uuid, con.topics))
+            println("Consumer connected")
+          }
+        case _ => throw new Exception("Got not a message from client")
       }
+      ois.close()
+
 
     }
   }
@@ -42,23 +51,24 @@ class AcceptMessagesThread(producers: ConcurrentLinkedQueue[Producer], consumers
         if(producer.is.ready) {
           val input = producer.is.readLine
 
-          if(input.equals("quit")){
-            producer.sock.close()
-            producers.remove(producer)
+          val bytes = Base64.getDecoder.decode(input.getBytes(StandardCharsets.UTF_8))
 
-          }else{
-            val bytes = Base64.getDecoder.decode(input.getBytes(StandardCharsets.UTF_8))
-
-            val ois = new ObjectInputStream(new ByteArrayInputStream(bytes))
-            ois.readObject match {
-              case msg: Message =>
-                println("Message: id:" + msg.id + ", topic:" + msg.topic + ", value:" + msg.value)
-                messages.add(msg)
-                producer.ps.println("SUCCESS")
-              case _ => throw new Exception("Got not a message from client")
-            }
-            ois.close()
+          val ois = new ObjectInputStream(new ByteArrayInputStream(bytes))
+          ois.readObject match {
+            case msg: Message =>
+              println("Message: id:" + msg.id + ", topic:" + msg.topic + ", value:" + msg.value)
+              messages.add(msg)
+              val confirmationMessage = MBUtils.SerializeObject(new Confirmation(msg.id))
+              producer.ps.println(confirmationMessage)
+            case con: Connection =>
+              if(con.subject.equals("disconnect")) {
+                producer.sock.close()
+                producers.remove(producer)
+              }
+            case _ => throw new Exception("Got not a message from client")
           }
+          ois.close()
+
         }
       })
       consumers.forEach((consumer) => {
@@ -88,7 +98,7 @@ class AcceptMessagesThread(producers: ConcurrentLinkedQueue[Producer], consumers
         }
       })
 
-      Thread.sleep(100)
+//      Thread.sleep(0)
     }
   }
 }
@@ -120,22 +130,15 @@ class MessagesSendingThread(messages: ConcurrentLinkedQueue[Message], consumers:
 
         if(!messageSent && consumers.size() > 0 && msg.priority == sendWithPriority){
 
-          val stream: ByteArrayOutputStream = new ByteArrayOutputStream()
-          val oos = new ObjectOutputStream(stream)
-          oos.writeObject(msg)
-          oos.close()
-          val retv = new String(
-            Base64.getEncoder().encode(stream.toByteArray),
-            StandardCharsets.UTF_8
-          )
+          val message = MBUtils.SerializeObject(msg)
 
           consumers.forEach((toConsumer) => {
-            toConsumer.topics.split(",").foreach(
+            toConsumer.topics.foreach(
               (topic)=> {
                 if(topic.equals(msg.topic)) {
                   println("Sending  :" + msg.id + "|" + msg.topic + " " + msg.value)
-                  Thread.sleep(100)
-                  toConsumer.ps.println(retv)
+                  Thread.sleep(10)
+                  toConsumer.ps.println(message)
                   messageSent = true
                 }
               }

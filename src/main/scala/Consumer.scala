@@ -6,7 +6,7 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
 import java.util.{Base64, Properties, UUID}
 import scala.io.Source
 
-case class Consumer(sock: Socket, is: BufferedReader, ps: PrintStream, name: String, topics:String)
+case class Consumer(sock: Socket, is: BufferedReader, ps: PrintStream, name: String, topics: Array[String])
 
 class ConsumerMessagesReceiveThread(is: BufferedReader, ps: PrintStream, receivedMessages: ConcurrentLinkedQueue[Message], sendNow: AtomicBoolean) extends Thread
 {
@@ -34,17 +34,10 @@ class ConsumerMessagesReceiveThread(is: BufferedReader, ps: PrintStream, receive
         if(!exists){
           println("Received             : " + msgo.topic + " " + msgo.value + "| priority " + msgo.priority)
           receivedMessages.add(msgo)
-          val msg2 = new Confirmation(msgo.id)
+
           println("Sending confirmation:" + msgo.id)
-          val stream2: ByteArrayOutputStream = new ByteArrayOutputStream()
-          val oos2 = new ObjectOutputStream(stream2)
-          oos2.writeObject(msg2)
-          oos2.close()
-          val retv2 = new String(
-            Base64.getEncoder().encode(stream2.toByteArray),
-            StandardCharsets.UTF_8
-          )
-          ps.println(retv2)
+          val connectionMessage = MBUtils.SerializeObject(new Confirmation(msgo.id))
+          ps.println(connectionMessage)
 
         }
       }
@@ -81,8 +74,8 @@ object Consumer {
     val clientType = properties.getProperty("clientType")
     val valueType = properties.getProperty("valueType")
 
-    ps.println(clientType)
-    ps.println(valueType)
+    val connectionMessage = MBUtils.SerializeObject(new Connection(clientType, valueType.split(",")))
+    ps.println(connectionMessage)
 
     val messagesReceiveThreadThread = new ConsumerMessagesReceiveThread(is, ps, receivedMessages, sendNow)
     messagesReceiveThreadThread.start()

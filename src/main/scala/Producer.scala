@@ -1,6 +1,6 @@
 import Consumer.getClass
 
-import java.io.{BufferedInputStream, BufferedOutputStream, BufferedReader, ByteArrayOutputStream, FileNotFoundException, FileOutputStream, InputStreamReader, ObjectOutputStream, PrintStream}
+import java.io.{BufferedInputStream, BufferedOutputStream, BufferedReader, ByteArrayInputStream, ByteArrayOutputStream, FileNotFoundException, FileOutputStream, InputStreamReader, ObjectInputStream, ObjectOutputStream, PrintStream}
 import java.net.{ServerSocket, Socket}
 import java.nio.charset.StandardCharsets
 import java.util.{Base64, Properties, UUID}
@@ -16,38 +16,34 @@ class ProducerMessageGeneratingThread(sock: Socket, os: PrintStream) extends Thr
     println("Messages generating thread - started.")
     Thread.sleep(2000)
     var x = 0
-    while(true){
+    while(x<48){
       x+=1
 
       var topic = ""
-      var value = 20
       val r = scala.util.Random.nextFloat()
+      val value = 50 + (50*r).toInt
 
-      if (r>0.5){
-        topic = "temperature"
-        value += (5*r).toInt
+      if (x%2==0){
+        topic = "entered"
       }else{
-        topic = "humidity"
-        value += 20 + (15*r).toInt
+        topic = "leaved"
       }
+
       var priority = 0
       if(r>0.25 && r<0.75){
         priority += 1
       }
-      val msg = new Message(x.toString, priority, topic, value)
-      println("priority " + msg.priority + " | "+ msg.topic + " " + msg.value)
-      val stream: ByteArrayOutputStream = new ByteArrayOutputStream()
-      val oos = new ObjectOutputStream(stream)
-      oos.writeObject(msg)
-      oos.close()
-      val retv = new String(
-        Base64.getEncoder().encode(stream.toByteArray),
-        StandardCharsets.UTF_8
-      )
-      os.println(retv)
-      Thread.sleep(1000)
+
+      println("Sending: priority " + priority + " | "+ topic + " " + value)
+      val message = MBUtils.SerializeObject(new Message(x.toString, priority, topic, value))
+      os.println(message)
+
+      if(x%2==0)
+        Thread.sleep(1000)
     }
-    os.println("quit")
+
+    val message = MBUtils.SerializeObject(new Connection("disconnect", Array[String]()))
+    os.println(message)
     sock.close()
     println("Connection closed")
   }
@@ -62,7 +58,15 @@ class ProducerMessagesReceiveThread(is: BufferedReader) extends Thread
     while(true){
       if(is.ready){
         val output = is.readLine
-        println("Received: " + output)
+        val bytes = Base64.getDecoder.decode(output.getBytes(StandardCharsets.UTF_8))
+
+        val ois = new ObjectInputStream(new ByteArrayInputStream(bytes))
+        ois.readObject match {
+          case confirmation: Confirmation =>
+            println("Confirmed:" + confirmation.id)
+          case _ => throw new Exception("Got not a message from client")
+        }
+        ois.close()
       }
 
       Thread.sleep(100)
@@ -89,7 +93,9 @@ object Producer {
       throw new FileNotFoundException("Properties file cannot be loaded")
     }
     val clientType = properties.getProperty("clientType")
-    os.println(clientType)
+
+    val connectionMessage = MBUtils.SerializeObject(new Connection(clientType, Array[String]()))
+    os.println(connectionMessage)
 
     val messagesReceiveThreadThread = new ProducerMessagesReceiveThread(is)
     messagesReceiveThreadThread.start()
