@@ -51,22 +51,20 @@ class ConsumeMessages(is: BufferedReader, ps: PrintStream, sock: Socket, manager
               exists = true
             }
           })
-          log.info("Received            : " + msgo.topic + " " + msgo.value + "| id " + msgo.id)
+//          log.info("Received            : " + msgo.topic + " " + msgo.value + "| id " + msgo.id)
           if(!exists){
-            log.info("Adding!")
+//            log.info("Adding!")
             receivedMessages.add(msgo)
-            log.info(receivedMessages.size().toString)
-            log.info("Sending confirmation:" + msgo.id)
-            val confirmationMessage = SerializeObject(new Confirmation(msgo))
-            ps.println(confirmationMessage)
+//            if(receivedMessages.size()%100==0)
+              log.info(receivedMessages.size().toString)
+//            log.info("Sending confirmation:" + msgo.id)
+
           }else{
             log.info("Already existing!")
 
           }
-
-        }
-        if(receivedMessages.size()==195){
-          println(System.nanoTime() - start)
+          val confirmationMessage = SerializeObject(new Confirmation(msgo))
+          ps.println(confirmationMessage)
 
         }
 //        Thread.sleep(3)
@@ -108,10 +106,9 @@ class ConsumerManager() extends Actor {
         throw new FileNotFoundException("Properties file cannot be loaded")
       }
 
-      val clientType = properties.getProperty("clientType")
-      val valueType = properties.getProperty("valueType")
+      val topics = properties.getProperty("topics")
 
-      val connectionMessage = SerializeObject(new Connection(clientType, valueType.split(",")))
+      val connectionMessage = SerializeObject(new Connection("consumer", topics.split(",")))
       ps.println(connectionMessage)
 
       val producerSystem = ActorSystem("consumer")

@@ -12,7 +12,7 @@ import java.util.Properties
 import scala.io.Source
 import akka.event.Logging
 
-class ProduceMessages(ps: PrintStream, sock: Socket) extends Actor {
+class ProduceMessages(ps: PrintStream, sock: Socket, topics: Array[String]) extends Actor {
   override def preStart(): Unit = log.info("ProduceMessages starting!")
 
   override def postStop(): Unit = log.info("ProduceMessages stopping!")
@@ -23,37 +23,26 @@ class ProduceMessages(ps: PrintStream, sock: Socket) extends Actor {
 
 
       println("Messages generating thread - started.")
-      Thread.sleep(100)
-      var x = 0
-      while(x<100){
-        x+=1
+      var message_id = 0
+      while(message_id < 100){
+        message_id += 1
 
         var topic = ""
         val r = scala.util.Random.nextFloat()
         val value = 50 + (50*r).toInt
 
-        if (x%2==0){
-          topic = "entered"
-        }else{
-          topic = "leaved"
-        }
+        topic = topics(message_id % topics.length)
 
         var priority = 0
-        if(r>0.25 && r<0.75){
+        if(r>0.5){
           priority += 1
         }
 
-        println("Sending: priority " + priority + " | "+ topic + " " + value)
+//        println("Sending: priority " + priority + " | "+ topic + " " + value)
         val now = System.nanoTime()
-        val message = SerializeObject(new Message(x.toString, now, priority, topic, value))
+        val message = SerializeObject(new Message(message_id, now, priority, topic, value))
         ps.println(message)
-        log.info("message sent")
-
-//        messageHolder ! new Message(x.toString, priority, topic, value)
-
-
-//        if(x%2==0)
-//          Thread.sleep(x*2)
+//        log.info("message sent")
       }
       val message = SerializeObject(new Connection("disconnect", Array[String]()))
       ps.println(message)
@@ -74,6 +63,12 @@ object Producer extends App{
     val is = new BufferedReader(new InputStreamReader(sock.getInputStream))
     val os = new PrintStream(sock.getOutputStream)
 
+    val connectionMessage = SerializeObject(new Connection("producer", Array[String]()))
+    os.println(connectionMessage)
+
+    val producerSystem = ActorSystem("producer")
+
+
     val url = getClass.getResource("producer.properties")
     val properties: Properties = new Properties()
     if (url != null) {
@@ -84,14 +79,10 @@ object Producer extends App{
       println("properties file cannot be loaded")
       throw new FileNotFoundException("Properties file cannot be loaded")
     }
-    val clientType = properties.getProperty("clientType")
-    val connectionMessage = SerializeObject(new Connection(clientType, Array[String]()))
-    os.println(connectionMessage)
 
+    val topics = properties.getProperty("topics")
 
-    val producerSystem = ActorSystem("producer")
-
-    val produceMessages = producerSystem.actorOf(Props(classOf[ProduceMessages], os, sock), "producer")
+    val produceMessages = producerSystem.actorOf(Props(classOf[ProduceMessages], os, sock, topics.split(",")), "producer")
     produceMessages ! Start
 
     Thread.sleep(3000)

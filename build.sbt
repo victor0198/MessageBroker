@@ -21,4 +21,3 @@ libraryDependencies ++= Seq(
   "ch.qos.logback" % "logback-classic" % "1.2.11",
 )
 libraryDependencies += "org.reactivemongo" % "play2-reactivemongo_3" % "1.1.0-play28-RC4"
-
