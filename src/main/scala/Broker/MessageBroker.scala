@@ -431,7 +431,7 @@ class ConsumerMessageReceiver(is: BufferedReader) extends Actor{
 
 
 object MessageBroker extends App{
-  val url = getClass.getResource("producer.properties")
+  val url = getClass.getResource("broker.properties")
   val properties: Properties = new Properties()
   if (url != null) {
     val source = Source.fromURL(url)
@@ -442,7 +442,7 @@ object MessageBroker extends App{
     throw new FileNotFoundException("Properties file cannot be loaded")
   }
 
-  val maxSentMessagesPerSecond = properties.getProperty("maxSentMessagesPerSecond")
+  val maxSentMessagesPerSecond = properties.getProperty("maxSentMessagesPerSecond").toInt
 
   val ss = new ServerSocket(4444)
 
