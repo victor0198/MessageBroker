@@ -10,11 +10,11 @@ import Utilities.Serialization.SerializeObject
 import akka.actor.typed.*
 import akka.actor.typed.scaladsl.*
 
-import java.io.{BufferedReader, ByteArrayInputStream, ByteArrayOutputStream, File, InputStream, InputStreamReader, ObjectInputStream, ObjectOutputStream, PrintStream, PrintWriter}
+import java.io.{BufferedReader, ByteArrayInputStream, ByteArrayOutputStream, File, FileNotFoundException, InputStream, InputStreamReader, ObjectInputStream, ObjectOutputStream, PrintStream, PrintWriter}
 import java.net.{ServerSocket, Socket}
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.{Base64, UUID}
+import java.util.{Base64, Properties, UUID}
 import akka.actor.{Actor, ActorRef, ActorSystem, PoisonPill, Props}
 
 import language.postfixOps
@@ -25,6 +25,7 @@ import java.util
 import scala.concurrent.Future
 import reactivemongo.api.MongoConnection
 
+import scala.io.Source
 import scala.util.control.Breaks.break
 
 case object AskForMessage
@@ -122,7 +123,7 @@ class MessagesPropagator(messagesHolder: ActorRef, messagesDistributor: ActorRef
 }
 
 
-class MessagesDistributor(messagesHolder: ActorRef) extends Actor {
+class MessagesDistributor(messagesHolder: ActorRef, maxSentMessagesPerSecond: Int) extends Actor {
   val consumers = new ConcurrentLinkedQueue[CustomerSubscription]()
   val log: LoggingAdapter = Logging(context.system, this)
   var lastTimeAsked = System.nanoTime()
@@ -158,7 +159,7 @@ class MessagesDistributor(messagesHolder: ActorRef) extends Actor {
 //      if((System.nanoTime() - 10000000) > lastTimeAsked &&
       if(!consumers.isEmpty) {
         lastTimeAsked = System.nanoTime()
-        Thread.sleep(5) //5
+        Thread.sleep((1000/maxSentMessagesPerSecond).toInt) // 5ms
         messagesHolder ! AskForMessage
         self ! AskForMessage
       }
@@ -430,13 +431,26 @@ class ConsumerMessageReceiver(is: BufferedReader) extends Actor{
 
 
 object MessageBroker extends App{
+  val url = getClass.getResource("producer.properties")
+  val properties: Properties = new Properties()
+  if (url != null) {
+    val source = Source.fromURL(url)
+    properties.load(source.bufferedReader())
+  }
+  else {
+    println("properties file cannot be loaded")
+    throw new FileNotFoundException("Properties file cannot be loaded")
+  }
+
+  val maxSentMessagesPerSecond = properties.getProperty("maxSentMessagesPerSecond")
+
   val ss = new ServerSocket(4444)
 
   val brokerSystem = ActorSystem("messageBroker")
 
   val messagesHolder = brokerSystem.actorOf(Props[MessagesHolder](), "messagesHolder")
 
-  val messagesDistributor = brokerSystem.actorOf(Props(classOf[MessagesDistributor], messagesHolder), "messagesDistributor")
+  val messagesDistributor = brokerSystem.actorOf(Props(classOf[MessagesDistributor], messagesHolder, maxSentMessagesPerSecond), "messagesDistributor")
 
   val messagesPropagator = brokerSystem.actorOf(Props(classOf[MessagesPropagator], messagesHolder, messagesDistributor), "messagesPropagator")
   messagesPropagator ! Start
