@@ -21,10 +21,9 @@ class ProduceMessages(ps: PrintStream, sock: Socket, topics: Array[String]) exte
   def receive = {
     case Start =>
 
-
       println("Messages generating thread - started.")
       var message_id = 0
-      while(message_id < 100){
+      while(message_id < 200){
         message_id += 1
 
         var topic = ""
@@ -34,15 +33,21 @@ class ProduceMessages(ps: PrintStream, sock: Socket, topics: Array[String]) exte
         topic = topics(message_id % topics.length)
 
         var priority = 0
-        if(r>0.5){
+        if(r>0.2)
           priority += 1
-        }
+//        if(r>0.4)
+//          priority += 1
+//        if(r>0.6)
+//          priority += 1
+//        if(r>0.8)
+//          priority += 1
 
 //        println("Sending: priority " + priority + " | "+ topic + " " + value)
         val now = System.nanoTime()
         val message = SerializeObject(new Message(message_id, now, priority, topic, value))
         ps.println(message)
 //        log.info("message sent")
+//        Thread.sleep(5)
       }
       val message = SerializeObject(new Connection("disconnect", Array[String]()))
       ps.println(message)
@@ -55,7 +60,7 @@ class ProduceMessages(ps: PrintStream, sock: Socket, topics: Array[String]) exte
 }
 
 object Producer extends App{
-  while(true){
+//  while(true){
 
     val host = "localhost"
     val port = 4444
@@ -85,7 +90,7 @@ object Producer extends App{
     val produceMessages = producerSystem.actorOf(Props(classOf[ProduceMessages], os, sock, topics.split(",")), "producer")
     produceMessages ! Start
 
-    Thread.sleep(3000)
-  }
+//    Thread.sleep(1000)
+//  }
 
 }

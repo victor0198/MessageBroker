@@ -33,7 +33,7 @@ class ConsumeMessages(is: BufferedReader, ps: PrintStream, sock: Socket, manager
     case Start =>
       log.info("Messages receiving thread - started.")
       val start = System.nanoTime()
-      while(receivedMessages.size()<=5000){
+      while(receivedMessages.size()<5000){
         if(is.ready){
           val input = is.readLine
           val bytes = Base64.getDecoder.decode(input.getBytes(StandardCharsets.UTF_8))
@@ -51,26 +51,22 @@ class ConsumeMessages(is: BufferedReader, ps: PrintStream, sock: Socket, manager
               exists = true
             }
           })
-//          log.info("Received            : " + msgo.topic + " " + msgo.value + "| id " + msgo.id)
           if(!exists){
-//            log.info("Adding!")
             receivedMessages.add(msgo)
 //            if(receivedMessages.size()%100==0)
-              log.info(receivedMessages.size().toString)
-//            log.info("Sending confirmation:" + msgo.id)
+              log.info("Message " + receivedMessages.size().toString + "|  id " + msgo.id)
 
           }else{
             log.info("Already existing!")
-
           }
-          val confirmationMessage = SerializeObject(new Confirmation(msgo))
-          ps.println(confirmationMessage)
+          val confirmationMessage = new Confirmation(msgo, true)
+          if(receivedMessages.size() == 5000)
+            confirmationMessage.connection = false
+          ps.println(SerializeObject(confirmationMessage))
 
         }
-//        Thread.sleep(3)
+        Thread.sleep(3)
       }
-      val message = SerializeObject(new Connection("disconnect", Array[String]()))
-      ps.println(message)
       sock.close()
 
       self ! PoisonPill

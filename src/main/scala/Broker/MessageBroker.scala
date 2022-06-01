@@ -1,6 +1,5 @@
 package Broker
 
-import Broker.MessageBroker.messagesDistributor
 import SharedStructures.Message
 import SharedStructures.Connection
 import SharedStructures.Confirmation
@@ -23,30 +22,20 @@ import scala.concurrent.duration.*
 import akka.event.{Logging, LoggingAdapter}
 
 import java.util
+import scala.concurrent.Future
+import reactivemongo.api.MongoConnection
 
+import scala.util.control.Breaks.break
 
 case object AskForMessage
 case object NoMessage
 case object CheckSocket
 case object Listen
-
-//object MBUtils {
-//  def SerializeObject(o: Object): String = {
-//    val stream: ByteArrayOutputStream = new ByteArrayOutputStream()
-//    val oos = new ObjectOutputStream(stream)
-//    oos.writeObject(o)
-//    oos.close()
-//    new String(
-//      Base64.getEncoder().encode(stream.toByteArray),
-//      StandardCharsets.UTF_8
-//    )
-//  }
-//}
+case object AskForConsumers
 
 
-
-class MessagesHolder(messagesDistributor: ActorRef) extends Actor {
-  val messages = new ConcurrentLinkedQueue[Message]()
+class MessagesHolder() extends Actor {
+  var messages = new util.LinkedList[MessagesPriority]()
   val log: LoggingAdapter = Logging(context.system, this)
   var lastSentAt = 0L
 
@@ -56,68 +45,123 @@ class MessagesHolder(messagesDistributor: ActorRef) extends Actor {
   }
   def receive: Receive = {
     case message: Message =>
-//      log.info("1")
-//      var timeToSleep = 10 - (System.nanoTime() - lastSentAt) / 1000000
-//      log.info("Will sleep:" + timeToSleep)
-//      Thread.sleep(timeToSleep)
-      messages.add(message)
-      if(message.id%10==0)
-        log.info("Common List Size: " + messages.size())
-      messagesDistributor ! message
-      lastSentAt = System.nanoTime()
-//    case AskForMessage =>
-//      log.info("2")
-//      if(messages.size()>0){
-//        sender() ! messages.peek()
-//      }else{
-//        sender() ! NoMessage
-//      }
-    case delMgs: DeleteMessage =>
-      log.info("3")
-      messages.remove(delMgs.msg)
+      var added = false
+      var it = messages.iterator()
+      while(it.hasNext && !added){
+        val theList = it.next()
+          if(theList.priority == message.priority){
+            theList.msgs.add(message)
+            added = true
+          }
+      }
+
+      if(!added) {
+        var newArr = new util.LinkedList[Message]()
+        newArr.add(message)
+        val newType = new MessagesPriority(message.priority, newArr)
+
+        var addedList = false
+        it = messages.iterator()
+        var index = 0
+        while(it.hasNext && !addedList){
+          val theList = it.next()
+          if(theList.priority < message.priority){
+            messages.add(index, newType)
+            addedList = true
+          }
+          index+=1
+        }
+        if(!addedList)
+          messages.addLast(newType)
+
+      }
+
+      it = messages.iterator()
+      while(it.hasNext) {
+        log.info("A list:")
+        val theList = it.next()
+        val listIt = theList.msgs.iterator()
+        while(listIt.hasNext){
+          val item = listIt.next()
+          log.info("Message: " + item.id + "|pr" + item.priority)
+        }
+      }
+
+    case AskForMessage =>
+      var sent = false
+      val it = messages.iterator()
+//      log.info("Getting message from holder")
+      while(it.hasNext && !sent){
+//        log.info("Checking a list")
+        val theList = it.next().msgs
+        val oneListIt = theList.iterator()
+        while(oneListIt.hasNext && !sent){
+          val item = oneListIt.next()
+          log.info("Getting from holder:"+item.id)
+          sender() ! item
+          sent = true
+          theList.remove(item)
+        }
+//        log.info("Common List Size: " + messages.size())
+      }
+
   }
 }
 
-//class ReceiverTicks(messageReceiver: ActorRef) extends Actor {
-//  def receive = {
-//    case Start =>
-//      while(true) {
-//        Thread.sleep(20)
-//        messageReceiver ! AskForMessage
-//      }
-//  }
-//}
+class MessagesPropagator(messagesHolder: ActorRef, messagesDistributor: ActorRef) extends Actor {
+
+  var numberOfConsumers = 0
+  def receive = {
+    case Start =>
+      Thread.sleep(100)
+//      println("propagator asking")
+      messagesDistributor ! AskForMessage
+
+      self ! Start
+  }
+}
 
 
-class MessagesDistributor() extends Actor {
+class MessagesDistributor(messagesHolder: ActorRef) extends Actor {
   val consumers = new ConcurrentLinkedQueue[CustomerSubscription]()
   val log: LoggingAdapter = Logging(context.system, this)
+  var lastTimeAsked = System.nanoTime()
 
   def receive: Receive = {
     case msg: Message =>
-
+      log.info("got msg" + msg.id)
       consumers.forEach(consumer => {
-//        log.info("consumer topics: " + consumer.topics.mkString("Array(", ", ", ")"))
         consumer.topics.foreach(topic =>{
           if (msg.topic.equals(topic)){
-//            log.info("sending it!")
-//            log.info(consumer.sender.toString)
-//            consumer.sender ! AskForMessage//msg
             consumer.sender ! Message(msg.id, msg.timeStamp, msg.priority, msg.topic, msg.value)
           }
         })
       })
 
-      sender() ! DeleteMessage(msg)
+    case cs: CustomerSubscription =>
+      var exists = false
+      consumers.forEach(c =>{
+        if(c.sender == cs.sender && cs.topics.length == 0){
+          println("removing from consumers list of distributor")
+          consumers.remove(c)
+          exists = true
+        }
+      })
+      if(!exists)
+        consumers.add(cs)
 
-    case NoMessage =>
-//      log.info("5")
-      log.info("NO message (from holder)")
+//    case AskForConsumers =>
+//      println("sending size:" + consumers.size())
+//      sender() ! ConsumersState(consumers.size())
 
-    case cc: CustomerSubscription =>
-//      log.info("6")
-      consumers.add(cc)
-
+    case AskForMessage =>
+//      if((System.nanoTime() - 10000000) > lastTimeAsked &&
+      if(!consumers.isEmpty) {
+        lastTimeAsked = System.nanoTime()
+        Thread.sleep(5) //5
+        messagesHolder ! AskForMessage
+        self ! AskForMessage
+      }
   }
 }
 
@@ -202,7 +246,7 @@ class ProducerMessageReceiving(is: BufferedReader, sock: Socket, messagesHolder:
         val ois = new ObjectInputStream(new ByteArrayInputStream(bytes))
         ois.readObject match {
           case msg: Message =>
-//            log.info("Message: id:" + msg.id + ", topic:" + msg.topic + ", value:" + msg.value)
+            log.info("Message: id:" + msg.id + ", priority:" + msg.priority + ", topic:" + msg.topic + ", value:" + msg.value)
             messagesHolder ! msg
 //                  messages.add(msg)
 //                  val confirmationMessage = MBUtils.SerializeObject(new Confirmation(msg.id))
@@ -266,8 +310,9 @@ class ConsumerMessagesSender(sock: Socket, sen: ActorRef, consumerReceiver: Acto
     case AskForMessage =>
       if(messages.size()>0) {
         messages.forEach(message =>{
-          if(System.nanoTime()-100000000 > message.lastSentAt){
+          if(System.nanoTime()-500000000 > message.lastSentAt){
             sen ! message
+//            log.info("resending" + message.msg.id)
             consumerReceiver ! AskForMessage
             message.lastSentAt = System.nanoTime()
           }
@@ -277,6 +322,7 @@ class ConsumerMessagesSender(sock: Socket, sen: ActorRef, consumerReceiver: Acto
       }
 
     case msg: Message =>
+      log.info("new msg to m sender" + msg.id)
       messages.add(new MessageToSend(msg, lastSentAt = System.nanoTime()))
 
       sen ! msg
@@ -287,7 +333,9 @@ class ConsumerMessagesSender(sock: Socket, sen: ActorRef, consumerReceiver: Acto
     case CloseSocket =>
       sock.close()
       sen ! PoisonPill
+      messagesDistributor ! CustomerSubscription(Array[String](), self)
       self ! PoisonPill
+
     case conf: Confirmation =>
       messages.forEach(m=>{
         if(m.msg.id.equals(conf.m.id) && m.msg.timeStamp.equals(conf.m.timeStamp)){
@@ -295,7 +343,7 @@ class ConsumerMessagesSender(sock: Socket, sen: ActorRef, consumerReceiver: Acto
           messages.remove(m)
         }
       })
-      log.info("Sender List Size: " + messages.size())
+//      log.info("Sender List Size: " + messages.size())
 
 
   }
@@ -314,7 +362,7 @@ class Sender(ps: PrintStream) extends Actor{
 
     case msg: Message =>
       val serialized2 = SerializeObject(msg)
-//      log.info("Sender sending:" + msg.topic + "|" + msg.id)
+      log.info("Sender sending:" + msg.topic + "|" + msg.id)
       ps.println(serialized2)
 
 
@@ -343,42 +391,33 @@ class ConsumerMessageReceiver(is: BufferedReader) extends Actor{
 
           val ois = new ObjectInputStream(new ByteArrayInputStream(bytes))
           ois.readObject match {
-            case con: Connection =>
-              log.info("Disconnecting the consumer!!!")
-              if(con.subject.equals("disconnect")) {
+            case confirm: Confirmation =>
+              if (noMsg - noResponsePrev == 0) {
+                if (replyTiming > 30)
+                  replyTiming = 20
+                else
+                  replyTiming = replyTiming - 1
+              } else if (noMsg - noResponsePrev == 1 || noMsg - noResponsePrev == 2)
+                replyTiming += 3
+              else
+                replyTiming += 5
+              if (replyTiming < 1)
+                replyTiming = 1
+              noResponsePrev = noMsg
+
+              sender() ! confirm
+
+              if(!confirm.connection) {
                 log.info("terminating ConsumerMessageReceiving actor " + akka.serialization.Serialization.serializedActorPath(self))
                 sender() ! CloseSocket
                 self ! PoisonPill
               }
-            case confirm: Confirmation =>
-
-//              log.info("got response" + confirm.m.id)
-
-              if(noMsg - noResponsePrev == 0){
-                if(replyTiming>30)
-                  replyTiming = 20
-                else
-                  replyTiming = replyTiming - 1
-              }else if(noMsg - noResponsePrev == 1 || noMsg - noResponsePrev == 2){
-                replyTiming += 3
-              }else
-                replyTiming += 5
-
-              if(replyTiming<1)
-                replyTiming = 1
-//              log.info("RT" + replyTiming.toString)
-
-              noResponsePrev = noMsg
-
-//              log.info("iSENDING:" + confirm.m.id + " " + confirm.m.timeStamp)
-              sender() ! confirm
-
             case _ => throw new Exception("Got not a message from client")
           }
           ois.close()
 
       }else{
-        log.info("no response" + noMsg)
+//        log.info("no response" + noMsg)
         noMsg += 1
         if(noMsg - noResponsePrev > 10)
           replyTiming = 200
@@ -395,9 +434,12 @@ object MessageBroker extends App{
 
   val brokerSystem = ActorSystem("messageBroker")
 
-  val messagesDistributor = brokerSystem.actorOf(Props[MessagesDistributor](), "messagesDistributor")
+  val messagesHolder = brokerSystem.actorOf(Props[MessagesHolder](), "messagesHolder")
 
-  val messagesHolder = brokerSystem.actorOf(Props(classOf[MessagesHolder], messagesDistributor), "messagesHolder")
+  val messagesDistributor = brokerSystem.actorOf(Props(classOf[MessagesDistributor], messagesHolder), "messagesDistributor")
+
+  val messagesPropagator = brokerSystem.actorOf(Props(classOf[MessagesPropagator], messagesHolder, messagesDistributor), "messagesPropagator")
+  messagesPropagator ! Start
 
   val connectionAccepter = brokerSystem.actorOf(Props(classOf[ConnectionAccepter], ss, messagesHolder, messagesDistributor), "connectionAccepter")
   connectionAccepter ! Start
