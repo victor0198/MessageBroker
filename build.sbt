@@ -1,5 +1,7 @@
-course := "reactive"
-assignment := "actorbintree"
+name := "MB"
+version := "1.0"
+//course := "reactive"
+//assignment := "actorbintree"
 
 Test / parallelExecution := false
 
@@ -21,3 +23,5 @@ libraryDependencies ++= Seq(
   "ch.qos.logback" % "logback-classic" % "1.2.11",
 )
 libraryDependencies += "org.reactivemongo" % "play2-reactivemongo_3" % "1.1.0-play28-RC4"
+
+Compile / run / mainClass := Some("Broker.MessageBroker")

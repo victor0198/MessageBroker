@@ -26,8 +26,15 @@ The technologies used within the project, with the dependencies managed by sbt.
 - [x] [Serialized messages](#serialized-messages) - the messages are represented as classes which are serialized to be sent through TCP connection.
 - [x] [Delivery Guarantee](#delivery-guarantee) - the subscriber sends an acknowledgment for every received message.
 - [x] [Message priority](#message-priority) - the publisher sets the priority of each message.
-- [ ] Persistent messages
-- [ ] Docker Compose configuration
+- [x] Persistent messages - saved in a file, with an interval specified in broker.properties file.
+- [x] Docker Compose configuration - the containers are connecting in a bridge network, and communicating through TCP sockets.
 
-
-
+## How to run
+### Build docker images:
+To build 3 distinct images, each one running either hte broker,producer or consumer, change the following line in the build.sbt file:<br>
+```Compile / run / mainClass := Some("<main_file_location>")```<br>
+The main_file_location values are:
+- for messsage broker: Broker.MessageBroker
+- for producer: Producer.Producer
+- for consumer: Consumer.Consumer 
+For each main_file_location value, load the sbt changes and compile the project. Then build the image

@@ -12,18 +12,17 @@ import java.util.Properties
 import scala.io.Source
 import akka.event.Logging
 
-class ProduceMessages(ps: PrintStream, sock: Socket, topics: Array[String]) extends Actor {
-  override def preStart(): Unit = log.info("ProduceMessages starting!")
+class ProduceMessages(ps: PrintStream, sock: Socket, topics: Array[String], messagesPerSecond: Int) extends Actor {
+  override def preStart(): Unit = println("Producer - Connecting")
 
-  override def postStop(): Unit = log.info("ProduceMessages stopping!")
+//  override def postStop(): Unit = println("ProduceMessages stopping!")
   val log = Logging(context.system, this)
-  
+
   def receive = {
     case Start =>
-
-      println("Messages generating thread - started.")
+      println("Producer - sending " + messagesPerSecond + " messages..")
       var message_id = 0
-      while(message_id < 200){
+      while(message_id < messagesPerSecond){
         message_id += 1
 
         var topic = ""
@@ -35,34 +34,32 @@ class ProduceMessages(ps: PrintStream, sock: Socket, topics: Array[String]) exte
         var priority = 0
         if(r>0.2)
           priority += 1
-//        if(r>0.4)
-//          priority += 1
-//        if(r>0.6)
-//          priority += 1
-//        if(r>0.8)
-//          priority += 1
+        if(r>0.4)
+          priority += 1
+        if(r>0.6)
+          priority += 1
+        if(r>0.8)
+          priority += 1
 
-//        println("Sending: priority " + priority + " | "+ topic + " " + value)
         val now = System.nanoTime()
         val message = SerializeObject(new Message(message_id, now, priority, topic, value))
         ps.println(message)
-//        log.info("message sent")
-//        Thread.sleep(5)
       }
       val message = SerializeObject(new Connection("disconnect", Array[String]()))
       ps.println(message)
       sock.close()
-      println("Connection closed")
+      println("Producer -  connection closed")
       self ! PoisonPill
 
   }
 
 }
 
-object Producer extends App{
-//  while(true){
+@main def Producer: Unit = {
+  Thread.sleep(10000)
+  while(true){
 
-    val host = "localhost"
+    val host = "172.18.0.1"
     val port = 4444
     val sock = new Socket(host, port)
     val is = new BufferedReader(new InputStreamReader(sock.getInputStream))
@@ -73,24 +70,17 @@ object Producer extends App{
 
     val producerSystem = ActorSystem("producer")
 
-
-    val url = getClass.getResource("producer.properties")
     val properties: Properties = new Properties()
-    if (url != null) {
-      val source = Source.fromURL(url)
-      properties.load(source.bufferedReader())
-    }
-    else {
-      println("properties file cannot be loaded")
-      throw new FileNotFoundException("Properties file cannot be loaded")
-    }
+    val source = Source.fromFile("src/main/scala/Producer/producer.properties")
+    properties.load(source.bufferedReader())
 
     val topics = properties.getProperty("topics")
+    val messagesPerSecond = properties.getProperty("messagesPerSecond").toInt
 
-    val produceMessages = producerSystem.actorOf(Props(classOf[ProduceMessages], os, sock, topics.split(",")), "producer")
+    val produceMessages = producerSystem.actorOf(Props(classOf[ProduceMessages], os, sock, topics.split(","), messagesPerSecond), "producer")
     produceMessages ! Start
 
-//    Thread.sleep(1000)
-//  }
+    Thread.sleep(1000)
+  }
 
 }

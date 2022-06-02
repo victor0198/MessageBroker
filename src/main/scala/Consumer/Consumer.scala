@@ -19,10 +19,10 @@ import scala.io.Source
 class ConsumeMessages(is: BufferedReader, ps: PrintStream, sock: Socket, manager: ActorRef) extends Actor
 {
 
-  override def preStart(): Unit = log.info("ConsumeMessages starting!")
+  override def preStart(): Unit = log.info("Consumer - Connecting!")
 
   override def postStop(): Unit = {
-    log.info("ConsumeMessages stopping!")
+//    log.info("ConsumeMessages stopping!")
 
     manager ! Start
   }
@@ -31,7 +31,6 @@ class ConsumeMessages(is: BufferedReader, ps: PrintStream, sock: Socket, manager
   val receivedMessages = new ConcurrentLinkedQueue[Message]()
   def receive = {
     case Start =>
-      log.info("Messages receiving thread - started.")
       val start = System.nanoTime()
       while(receivedMessages.size()<5000){
         if(is.ready){
@@ -54,10 +53,10 @@ class ConsumeMessages(is: BufferedReader, ps: PrintStream, sock: Socket, manager
           if(!exists){
             receivedMessages.add(msgo)
 //            if(receivedMessages.size()%100==0)
-              log.info("Message " + receivedMessages.size().toString + "|  id " + msgo.id)
+              println("Consumer - Got message " + receivedMessages.size().toString + ": id " + msgo.id + ", priority " + msgo.priority + ", topic " + msgo.topic + ", value " + msgo.value)
 
           }else{
-            log.info("Already existing!")
+            println("Consumer - Already existing!")
           }
           val confirmationMessage = new Confirmation(msgo, true)
           if(receivedMessages.size() == 5000)
@@ -75,9 +74,9 @@ class ConsumeMessages(is: BufferedReader, ps: PrintStream, sock: Socket, manager
 
 class ConsumerManager() extends Actor {
 
-  override def preStart(): Unit = log.info("ConsumerManager starting!")
+//  override def preStart(): Unit = log.info("ConsumerManager starting!")
 
-  override def postStop(): Unit = log.info("ConsumerManager stopping!")
+//  override def postStop(): Unit = log.info("ConsumerManager stopping!")
 
   val log = Logging(context.system, this)
 
@@ -85,22 +84,15 @@ class ConsumerManager() extends Actor {
 
   def receive = {
     case Start =>
-      val host = "localhost"
+      val host = "172.18.0.1"
       val port = 4444
       val sock = new Socket(host, port)
       val is = new BufferedReader(new InputStreamReader(sock.getInputStream))
       val ps = new PrintStream(sock.getOutputStream)
-
-      val url = getClass.getResource("consumer.properties")
+      
       val properties: Properties = new Properties()
-      if (url != null) {
-        val source = Source.fromURL(url)
-        properties.load(source.bufferedReader())
-      }
-      else {
-        println("properties file cannot be loaded")
-        throw new FileNotFoundException("Properties file cannot be loaded")
-      }
+      val source = Source.fromFile("src/main/scala/Consumer/consumer.properties")
+      properties.load(source.bufferedReader())
 
       val topics = properties.getProperty("topics")
 
@@ -115,9 +107,14 @@ class ConsumerManager() extends Actor {
   }
 }
 
-object Consumer extends App {
+@main def Consumer: Unit = {
+  Thread.sleep(10000)
   val producerSystem = ActorSystem("consumer")
 
   val produceMessages = producerSystem.actorOf(Props[ConsumerManager](), "consumerManager")
   produceMessages ! Start
+  
+  while(true){
+    Thread.sleep(60000)
+  }
 }
