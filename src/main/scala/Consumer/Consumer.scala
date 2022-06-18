@@ -11,19 +11,19 @@ import akka.event.Logging
 import java.io.{BufferedReader, ByteArrayInputStream, FileNotFoundException, InputStreamReader, ObjectInputStream, PrintStream}
 import java.net.Socket
 import java.nio.charset.StandardCharsets
-import java.util.{Base64, Properties}
+import java.util.{Base64, Properties, UUID}
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import scala.io.AnsiColor._
 import scala.io.Source
 
-class ConsumeMessages(is: BufferedReader, ps: PrintStream, sock: Socket, manager: ActorRef) extends Actor
+class ConsumeMessages(acceptMessages: Int, is: BufferedReader, ps: PrintStream, sock: Socket, manager: ActorRef) extends Actor
 {
 
   override def preStart(): Unit = log.info("Consumer - Connecting!")
 
   override def postStop(): Unit = {
-//    log.info("ConsumeMessages stopping!")
-
+    log.info("A consumer stopped")
     manager ! Start
   }
   val log = Logging(context.system, this)
@@ -32,7 +32,7 @@ class ConsumeMessages(is: BufferedReader, ps: PrintStream, sock: Socket, manager
   def receive = {
     case Start =>
       val start = System.nanoTime()
-      while(receivedMessages.size()<5000){
+      while(receivedMessages.size()<acceptMessages){
         if(is.ready){
           val input = is.readLine
           val bytes = Base64.getDecoder.decode(input.getBytes(StandardCharsets.UTF_8))
@@ -52,14 +52,12 @@ class ConsumeMessages(is: BufferedReader, ps: PrintStream, sock: Socket, manager
           })
           if(!exists){
             receivedMessages.add(msgo)
-//            if(receivedMessages.size()%100==0)
-              println("Consumer - Got message " + receivedMessages.size().toString + ": id " + msgo.id + ", priority " + msgo.priority + ", topic " + msgo.topic + ", value " + msgo.value)
-
+            println(s"${MAGENTA}Consumer - Got message: id " + msgo.id + ", priority " + msgo.priority + ", topic " + msgo.topic + ", value " + msgo.value + s"${RESET}")
           }else{
             println("Consumer - Already existing!")
           }
           val confirmationMessage = new Confirmation(msgo, true)
-          if(receivedMessages.size() == 5000)
+          if(receivedMessages.size() == acceptMessages)
             confirmationMessage.connection = false
           ps.println(SerializeObject(confirmationMessage))
 
@@ -67,16 +65,12 @@ class ConsumeMessages(is: BufferedReader, ps: PrintStream, sock: Socket, manager
         Thread.sleep(3)
       }
       sock.close()
-
+      println("Disconnecting")
       self ! PoisonPill
   }
 }
 
 class ConsumerManager() extends Actor {
-
-//  override def preStart(): Unit = log.info("ConsumerManager starting!")
-
-//  override def postStop(): Unit = log.info("ConsumerManager stopping!")
 
   val log = Logging(context.system, this)
 
@@ -95,20 +89,21 @@ class ConsumerManager() extends Actor {
       properties.load(source.bufferedReader())
 
       val topics = properties.getProperty("topics")
-
-      val connectionMessage = SerializeObject(new Connection("consumer", topics.split(",")))
+      val acceptMessages = 5000
+      val consumerId = UUID.randomUUID().toString
+      val connectionMessage = SerializeObject(new Connection(consumerId,"consumer", topics.split(",")))
       ps.println(connectionMessage)
 
       val producerSystem = ActorSystem("consumer")
 
-      val produceMessages = producerSystem.actorOf(Props(classOf[ConsumeMessages], is, ps, sock, self), "consumer")
+      val produceMessages = producerSystem.actorOf(Props(classOf[ConsumeMessages], acceptMessages, is, ps, sock, self), "consumer")
       produceMessages ! Start
 
   }
 }
 
 @main def Consumer: Unit = {
-  Thread.sleep(10000)
+  Thread.sleep(5000)
   val producerSystem = ActorSystem("consumer")
 
   val produceMessages = producerSystem.actorOf(Props[ConsumerManager](), "consumerManager")

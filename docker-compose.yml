@@ -3,28 +3,33 @@ version: "3.9"
 services:
 
   message_broker:
-    image: broker:v1
-    container_name: br
+    image: message_broker:v1
+    container_name: message_broker
     ports: 
       - "4444:4444"
     networks:
       - mbnet
-  
-  a_producer:
+
+  consumer:
+    image: consumer:v1
+    container_name: consumer
+    ports:
+      - "4446:4446"
+    networks:
+      - mbnet
+    depends_on:
+      - message_broker
+
+  producer:
     image: producer:v1
-    container_name: pr
+    container_name: producer
     ports: 
       - "4445:4445"
     networks:
       - mbnet
-  
-  a_consumer:
-    image: consumer:v1
-    container_name: co
-    ports: 
-      - "4446:4446"
-    networks:
-      - mbnet
+    depends_on:
+      - consumer
+
 
 networks:
   mbnet:

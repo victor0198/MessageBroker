@@ -1,3 +1,3 @@
 package SharedStructures
 
-class Connection(val subject:String, val topics: Array[String]) extends Serializable
+class Connection(val clientId:String, val subject:String, val topics: Array[String]) extends Serializable

@@ -11,8 +11,9 @@ object Serialization {
     oos.writeObject(o)
     oos.close()
     new String(
-      Base64.getEncoder().encode(stream.toByteArray),
+      Base64.getEncoder.encode(stream.toByteArray),
       StandardCharsets.UTF_8
     )
   }
 }
+

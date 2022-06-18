@@ -1,11 +1,6 @@
 package Broker
 
-import SharedStructures.Message
-import SharedStructures.Connection
-import SharedStructures.Confirmation
-import SharedStructures.Start
-import SharedStructures.CloseSocket
-import SharedStructures.SendNext
+import SharedStructures.{Ack, CloseSocket, Confirmation, Connection, Message, PubAck, Publish, SendNext, Start}
 import Utilities.Serialization.SerializeObject
 import akka.actor.typed.*
 import akka.actor.typed.scaladsl.*
@@ -27,6 +22,7 @@ import reactivemongo.api.MongoConnection
 
 import scala.io.Source
 import scala.util.control.Breaks.break
+import scala.io.AnsiColor._
 
 case object AskForMessage
 case object NoMessage
@@ -42,20 +38,19 @@ class MessagesHolder() extends Actor {
   var lastSentAt = 0L
 
   override def preStart(): Unit = {
-    log.info("Reading messages from Persistent Storage")
+    log.info(s"${REVERSED}${WHITE}Reading messages from Persistent Storage" + s"${RESET}")
     lastSentAt = System.nanoTime()
     val file = Source.fromFile("SavedMessages/Messages.txt")
     val it = file.getLines()
     while(it.hasNext){
       val line = it.next()
-//      log.info(line)
       if(line.startsWith("~")){
         val newArr = new util.LinkedList[Message]()
         val newType = new MessagesPriority(line.substring(1,2).toInt, newArr)
         messages.addLast(newType)
       }else{
         val thisLine = line.split("[|]")
-        messages.getLast.msgs.add(Message(thisLine(0).toInt, thisLine(1).toLong, thisLine(2).toInt, thisLine(3), thisLine(4).toInt))
+        messages.getLast.msgs.add(Message(thisLine(0).toInt, "", thisLine(1).toLong, thisLine(2).toInt, thisLine(3), thisLine(4).toInt))
       }
     }
 
@@ -64,7 +59,7 @@ class MessagesHolder() extends Actor {
   }
   def receive: Receive = {
     case message: Message =>
-      log.info("Received message: id " + message.id + ", priority " + message.priority + ", topic " + message.topic + ", value " + message.value)
+      log.info(s"${REVERSED}${WHITE}Adding message to queue: id " + message.id + ", priority " + message.priority + ", topic " + message.topic + ", value " + message.value + s"${RESET}")
       var added = false
       var it = messages.iterator()
       while(it.hasNext && !added){
@@ -95,40 +90,25 @@ class MessagesHolder() extends Actor {
           messages.addLast(newType)
 
       }
-//      //printing
-//      it = messages.iterator()
-//      while(it.hasNext) {
-//        log.info("A list:")
-//        val theList = it.next()
-//        val listIt = theList.msgs.iterator()
-//        while(listIt.hasNext){
-//          val item = listIt.next()
-//          log.info("Message: " + item.id + "|pr" + item.priority)
-//        }
-//      }
 
     case AskForMessage =>
       var sent = false
       val it = messages.iterator()
-//      log.info("Getting message from holder")
       while(it.hasNext && !sent){
-//        log.info("Checking a list")
         val theList = it.next().msgs
         val oneListIt = theList.iterator()
         while(oneListIt.hasNext && !sent){
           val item = oneListIt.next()
-//          log.info("Getting from holder:"+item.id)
           sender() ! item
           sent = true
           theList.remove(item)
         }
-        //        log.info("Common List Size: " + messages.size())
       }
+
     case AskForSave =>
-      log.info("Saving queued messages")
+      log.info(s"${REVERSED}${WHITE}Saving queued messages" + s"${RESET}")
       val file = new File("SavedMessages/Messages.txt")
       val pw = new PrintWriter(file)
-//      pw.write("My text here!! hello !!")
 
       val it = messages.iterator()
       while(it.hasNext){
@@ -152,18 +132,16 @@ class MessagesSaving(messagesHolder: ActorRef, saveMessagesInterval: Int) extend
     case Start =>
       Thread.sleep(1000 * saveMessagesInterval)
       messagesHolder ! AskForSave
-
       self ! Start
   }
 }
 
-class MessagesPropagator(messagesHolder: ActorRef, messagesDistributor: ActorRef) extends Actor {
+class MessagesPropagator(messagesHolder: ActorRef, messagesDistributor: ActorRef, maxSentMessagesPerSecond: Int) extends Actor {
   val log: LoggingAdapter = Logging(context.system, this)
 
   def receive = {
     case Start =>
       Thread.sleep(100)
-//      println("propagator asking")
       messagesDistributor ! AskForMessage
 
       self ! Start
@@ -171,27 +149,29 @@ class MessagesPropagator(messagesHolder: ActorRef, messagesDistributor: ActorRef
 }
 
 
-class MessagesDistributor(messagesHolder: ActorRef, maxSentMessagesPerSecond: Int) extends Actor {
+class MessagesDistributor(messagesHolder: ActorRef, producerAcknowledger: ActorRef) extends Actor {
   val consumers = new ConcurrentLinkedQueue[CustomerSubscription]()
   val log: LoggingAdapter = Logging(context.system, this)
   var lastTimeAsked = System.nanoTime()
 
   def receive: Receive = {
     case msg: Message =>
-//      log.info("got msg" + msg.id)
+      var consumersNumber = 0
       consumers.forEach(consumer => {
         consumer.topics.foreach(topic =>{
           if (msg.topic.equals(topic)){
-            consumer.sender ! Message(msg.id, msg.timeStamp, msg.priority, msg.topic, msg.value)
+            consumer.sender ! msg
+            consumersNumber += 1
           }
         })
       })
+      if(!consumers.isEmpty)
+        producerAcknowledger ! BrokerAck(msg.producerId ,msg.id, consumersNumber, 0)
 
     case cs: CustomerSubscription =>
       var exists = false
       consumers.forEach(c =>{
         if(c.sender == cs.sender && cs.topics.length == 0){
-//          println("removing from consumers list of distributor")
           consumers.remove(c)
           exists = true
         }
@@ -199,39 +179,29 @@ class MessagesDistributor(messagesHolder: ActorRef, maxSentMessagesPerSecond: In
       if(!exists)
         consumers.add(cs)
 
-//    case AskForConsumers =>
-//      println("sending size:" + consumers.size())
-//      sender() ! ConsumersState(consumers.size())
-
     case AskForMessage =>
-//      if((System.nanoTime() - 10000000) > lastTimeAsked &&
       if(!consumers.isEmpty) {
         lastTimeAsked = System.nanoTime()
-        Thread.sleep((1000/maxSentMessagesPerSecond).toInt) // 5ms
+        Thread.sleep((1000/100).toInt)
         messagesHolder ! AskForMessage
-        self ! AskForMessage
       }
+
   }
 }
 
 
-class ConnectionAccepter(ss: ServerSocket, messagesHolder: ActorRef, messagesDistributor: ActorRef) extends Actor {
+class ConnectionAccepter(ss: ServerSocket, messagesHolder: ActorRef, messagesDistributor: ActorRef, producerAcknowledge: ActorRef) extends Actor {
 
   val log: LoggingAdapter = Logging(context.system, this)
 
   def receive: Receive = {
     case Start =>
-//      log.info("7")
-//      log.info("Connection accepting thread - started.")
       var producerIdx = 0
       var consumerIdx = 0
       while(true){
-//        log.info("a")
         val sock = ss.accept()
         val is = new BufferedReader(new InputStreamReader(sock.getInputStream))
         val ps = new PrintStream(sock.getOutputStream)
-        val uuid = UUID.randomUUID().toString
-//        log.info("Client connected: " + uuid.substring(0,4))
 
         val connection = is.readLine
         val bytes = Base64.getDecoder.decode(connection.getBytes(StandardCharsets.UTF_8))
@@ -239,54 +209,39 @@ class ConnectionAccepter(ss: ServerSocket, messagesHolder: ActorRef, messagesDis
         val ois = new ObjectInputStream(new ByteArrayInputStream(bytes))
         ois.readObject match {
           case con: Connection =>
-            log.info("New client: " + con.subject + ", topics:" + con.topics.mkString("Array(", ", ", ")"))
+            log.info(s"${REVERSED}${RED}New client: " + con.subject + ", topics:" + con.topics.mkString("Array(", ", ", ")") + s"${RESET}")
             if(con.subject.equals("producer")){
-//              log.info("Spawning a producer listener")
-
               val producerSender = context.actorOf(Props(classOf[ProducerMessageSender], ps, sock), "producerMessageSender:"+producerIdx)
-              val producerReceiver = context.actorOf(Props(classOf[ProducerMessageReceiving], is, sock, messagesHolder, producerSender), "producerMessageReceiver:"+producerIdx)
-              producerIdx += 1
+              val producerReceiver = context.actorOf(Props(classOf[ProducerMessageReceiving], is, sock, con.clientId, messagesHolder, producerSender, producerAcknowledge), "producerMessageReceiver:"+producerIdx)
+
+              producerAcknowledge ! ProducerInfo(con.clientId, producerSender)
               producerReceiver ! Listen
+              producerIdx += 1
             }
             else if (con.subject.equals("consumer")){
-
-//              log.info("Spawning a consumer sender")
-
-              val sender = context.actorOf(Props(classOf[Sender], ps), "sender:"+consumerIdx)
-              val consumerReceiver = context.actorOf(Props(classOf[ConsumerMessageReceiver], is), "consumerReceiver:"+consumerIdx)
-              val consumerSender = context.actorOf(Props(classOf[ConsumerMessagesSender], sock, sender, consumerReceiver, messagesDistributor), "consumerSender:"+consumerIdx)
+              val sender = context.actorOf(Props(classOf[ConsumerMessagesSender], ps), "ConsumerMessagesSender:"+consumerIdx)
+              val consumerReceiver = context.actorOf(Props(classOf[ConsumerMessageReceiver], is, producerAcknowledge), "ConsumerMessageReceiver:"+consumerIdx)
+              val consumerSender = context.actorOf(Props(classOf[ConsumerMessagesManager], sock, sender, consumerReceiver, messagesDistributor), "ConsumerMessagesManager:"+consumerIdx)
 
               consumerReceiver ! AskForMessage
-//              val receiverTicks = context.actorOf(Props(classOf[ReceiverTicks], consumerReceiver), "receiverTicks:"+consumerIdx)
-//              receiverTicks ! Start
-
-              consumerIdx += 1
-
               messagesDistributor ! CustomerSubscription(con.topics, consumerSender)
+              consumerIdx += 1
             }
           case _ => throw new Exception("Got not a message from client")
         }
         ois.close()
-
-
       }
   }
 }
 
-class ProducerMessageReceiving(is: BufferedReader, sock: Socket, messagesHolder: ActorRef, producerSender: ActorRef) extends Actor{
+class ProducerMessageReceiving(is: BufferedReader, sock: Socket, producerId: String, messagesHolder: ActorRef, producerSender: ActorRef, producerAcknowledge:ActorRef) extends Actor{
 
   val log: LoggingAdapter = Logging(context.system, this)
-
-
-//  override def preStart(): Unit = log.info("ProducerMessageReceiving starting!")
-
-//  override def postStop(): Unit = log.info("ProducerMessageReceiving stopping!")
+  var publishedItems = util.LinkedList[Publish]()
 
   def receive: Receive = {
     case Listen =>
-//      log.info("8")
-
-      Thread.sleep(10)
+      Thread.sleep(5)
       if(is.ready()) {
         val input = is.readLine
 
@@ -294,75 +249,150 @@ class ProducerMessageReceiving(is: BufferedReader, sock: Socket, messagesHolder:
 
         val ois = new ObjectInputStream(new ByteArrayInputStream(bytes))
         ois.readObject match {
-          case msg: Message =>
-//            log.info("Message: id:" + msg.id + ", priority:" + msg.priority + ", topic:" + msg.topic + ", value:" + msg.value)
-            messagesHolder ! msg
-//                  messages.add(msg)
-//                  val confirmationMessage = MBUtils.SerializeObject(new Confirmation(msg.id))
-//                  producer.ps.println(confirmationMessage)
+          case publish: Publish =>
+            if(publish.qos==0){
+              messagesHolder ! publish.message
+            }else if(publish.qos==1) {
+
+              // check if message is duplicate
+              var sameMessage = false
+              publishedItems.forEach(pub => {
+                if (pub.message.producerId == publish.message.producerId) {
+                  if (pub.message.id == publish.message.id) {
+                    sameMessage = true
+                  }
+                }
+              })
+
+              if (sameMessage) {
+                log.info(s"${REVERSED}${BLUE}Got PUBLISH DUP" + s"${RESET}")
+              }
+
+              if (!sameMessage) {
+                // delete previous message
+                if (!publishedItems.isEmpty) {
+                  var sameProducerMessage = false
+                  var toRemove = publishedItems.get(0)
+                  var continueRemoving = true
+                  while (continueRemoving) {
+                    publishedItems.forEach(pub => {
+                      if (pub.message.producerId == publish.message.producerId) {
+                        sameProducerMessage = true
+                        toRemove = pub
+                      }
+                    })
+                    if (sameProducerMessage) {
+                      publishedItems.remove(toRemove)
+                    } else {
+                      continueRemoving = false
+                    }
+                    sameProducerMessage = false
+                  }
+                }
+
+                log.info(s"${REVERSED}${BLUE}Got PUBLISH" + s"${RESET}")
+                messagesHolder ! publish.message
+
+                producerSender ! new PubAck(publish.message.id)
+                publishedItems.add(publish)
+              }
+            }
+
           case con: Connection =>
             if(con.subject.equals("disconnect")) {
-//              log.info("terminating ProducerMessageReceiving actor " + akka.serialization.Serialization.serializedActorPath(self))
+              sock.close()
+              producerSender ! PoisonPill
+              producerAcknowledge ! producerId
               self ! PoisonPill
-              producerSender ! CloseSocket
-//              context.stop(self)
             }
+
           case _ => throw new Exception("Got not a message from client")
         }
         ois.close()
-
       }
-
-      producerSender ! CheckSocket
-
-
+      if (!sock.isClosed){
+        self ! Listen
+      }
   }
 }
 
+class ProducerAcknowledge() extends Actor{
+
+  val log: LoggingAdapter = Logging(context.system, this)
+  val producers = util.LinkedList[ProducerInfo]()
+  val acknowledgements = util.LinkedList[BrokerAck]
+
+  def receive: Receive = {
+    case producerInfo: ProducerInfo =>
+      producers.add(producerInfo)
+
+    case ack: BrokerAck =>
+//      log.info(s"${REVERSED}${YELLOW}ACK: to producer:"+ack.producerId + " | Message id:" + ack.messageId)
+      acknowledgements.add(ack)
+
+    case confirmation: Confirmation =>
+      var removeAck = false
+      var ackToRemove = acknowledgements.get(0)
+      acknowledgements.forEach(anAck => {
+        if(confirmation.m.id==anAck.messageId && confirmation.m.producerId==anAck.producerId){
+          anAck.confirmationsReceived+=1
+        }
+        if(anAck.confirmationsReceived == anAck.confirmationsNeeded){
+          removeAck = true
+          ackToRemove = anAck
+        }
+      })
+      log.info(s"${REVERSED}${MAGENTA}Confirmation from consumer to producer("+confirmation.m.producerId+") on message: " + confirmation.m.id + s"${RESET}")
+
+      producers.forEach(theProducer => {
+        if(theProducer.producerId.equals(ackToRemove.producerId)){
+          theProducer.producerSender ! new BrokerAck(ackToRemove.producerId, ackToRemove.messageId, ackToRemove.confirmationsNeeded, ackToRemove.confirmationsReceived)
+        }
+      })
+      acknowledgements.remove(ackToRemove)
+
+    case producerId: String =>
+      val it = producers.iterator()
+      var producerToRemove = producers.get(0)
+      while(it.hasNext){
+        val producer = it.next()
+        if(producer.producerId.equals(producerId)){
+          producerToRemove=producer
+        }
+      }
+      producers.remove(producerToRemove)
+  }
+}
 
 class ProducerMessageSender(ps: PrintStream, sock: Socket) extends Actor{
 
   val log: LoggingAdapter = Logging(context.system, this)
 
-
-//  override def preStart(): Unit = log.info("ProducerMessageSender starting!")
-
-//  override def postStop(): Unit = log.info("ProducerMessageSender stopping!")
-
   def receive: Receive = {
-    case CheckSocket =>
-      if (!sock.isClosed){
-        sender() ! Listen
-      }
-//      else{
-//        log.info("producer socket closed!")
-//      }
-
-    case CloseSocket =>
-      sock.close()
-      self ! PoisonPill
-
+    case ack: BrokerAck =>
+      val serializedAck = SerializeObject(new Ack(ack.messageId))
+      ps.println(serializedAck)
+      log.info(s"${REVERSED}${GREEN}ACK: to producer:"+ack.producerId + " | Message id:" + ack.messageId + s"${RESET}")
+    case puback: PubAck =>
+      log.info(s"${REVERSED}${YELLOW}Sending PUBACK. Message:"+puback.messageId + s"${RESET}")
+      val serializedPubAck = SerializeObject(puback)
+      ps.println(serializedPubAck)
   }
 }
 
 
-class ConsumerMessagesSender(sock: Socket, sen: ActorRef, consumerReceiver: ActorRef, messagesDistributor: ActorRef) extends Actor{
+class ConsumerMessagesManager(sock: Socket, sender: ActorRef, consumerReceiver: ActorRef, messagesDistributor: ActorRef) extends Actor{
 
   val messages = new ConcurrentLinkedQueue[MessageToSend]()
   val log: LoggingAdapter = Logging(context.system, this)
   var noMsg = 0
 
-//  override def preStart(): Unit = log.info("ConsumerMessagesSender starting!")
-//
-//  override def postStop(): Unit = log.info("ConsumerMessagesSender stopping!")
-
   def receive: Receive = {
     case AskForMessage =>
       if(messages.size()>0) {
         messages.forEach(message =>{
-          if(System.nanoTime()-500000000 > message.lastSentAt){
-            sen ! message
-//            log.info("resending" + message.msg.id)
+          if(System.nanoTime()-200000000 > message.lastSentAt && !sock.isClosed){
+//            sender ! message
             consumerReceiver ! AskForMessage
             message.lastSentAt = System.nanoTime()
           }
@@ -372,63 +402,45 @@ class ConsumerMessagesSender(sock: Socket, sen: ActorRef, consumerReceiver: Acto
       }
 
     case msg: Message =>
-//      log.info("new msg to m sender" + msg.id)
       messages.add(new MessageToSend(msg, lastSentAt = System.nanoTime()))
-
-      sen ! msg
-
+      sender ! msg
       consumerReceiver ! AskForMessage
-
 
     case CloseSocket =>
       sock.close()
-      sen ! PoisonPill
+      sender ! PoisonPill
       messagesDistributor ! CustomerSubscription(Array[String](), self)
       self ! PoisonPill
-
     case conf: Confirmation =>
       messages.forEach(m=>{
         if(m.msg.id.equals(conf.m.id) && m.msg.timeStamp.equals(conf.m.timeStamp)){
-//          log.info("Removing::"+conf.m.id)
           messages.remove(m)
         }
       })
-//      log.info("Sender List Size: " + messages.size())
-
-
   }
 }
 
 
 
-class Sender(ps: PrintStream) extends Actor{
+class ConsumerMessagesSender(ps: PrintStream) extends Actor{
 
   val log: LoggingAdapter = Logging(context.system, this)
-//  override def preStart(): Unit = log.info("Sender starting!")
-//
-//  override def postStop(): Unit = log.info("Sender stopping!")
-
   def receive: Receive = {
 
     case message: Message =>
       val serialized2 = SerializeObject(message)
-      log.info("Sending to consumer: id " + message.id + ", priority " + message.priority + ", topic " + message.topic + ", value " + message.value)
+      log.info(s"${REVERSED}${MAGENTA}Sending to consumer: id " + message.id + ", priority " + message.priority + ", topic " + message.topic + ", value " + message.value + s"${RESET}")
       ps.println(serialized2)
-
 
   }
 }
 
-class ConsumerMessageReceiver(is: BufferedReader) extends Actor{
+class ConsumerMessageReceiver(is: BufferedReader, producerAcknowledge: ActorRef) extends Actor{
 
   val log: LoggingAdapter = Logging(context.system, this)
   var replyTiming = 10
   var noMsg = 0
   var noResponsePrev = 0
-
-//  override def preStart(): Unit = log.info("ConsumerMessageReceiver starting!")
-
-//  override def postStop(): Unit = log.info("ConsumerMessageReceiver stopping!")
 
   def receive: Receive = {
 
@@ -456,9 +468,9 @@ class ConsumerMessageReceiver(is: BufferedReader) extends Actor{
               noResponsePrev = noMsg
 
               sender() ! confirm
+              producerAcknowledge ! confirm
 
               if(!confirm.connection) {
-//                log.info("terminating ConsumerMessageReceiving actor " + akka.serialization.Serialization.serializedActorPath(self))
                 sender() ! CloseSocket
                 self ! PoisonPill
               }
@@ -467,7 +479,6 @@ class ConsumerMessageReceiver(is: BufferedReader) extends Actor{
           ois.close()
 
       }else{
-//        log.info("no response" + noMsg)
         noMsg += 1
         if(noMsg - noResponsePrev > 10)
           replyTiming = 200
@@ -493,15 +504,17 @@ class ConsumerMessageReceiver(is: BufferedReader) extends Actor{
 
   val messagesHolder = brokerSystem.actorOf(Props[MessagesHolder](), "messagesHolder")
 
-  val messagesDistributor = brokerSystem.actorOf(Props(classOf[MessagesDistributor], messagesHolder, maxSentMessagesPerSecond), "messagesDistributor")
+  val producerAcknowledge = brokerSystem.actorOf(Props[ProducerAcknowledge](), "producerAcknowledge")
+
+  val messagesDistributor = brokerSystem.actorOf(Props(classOf[MessagesDistributor], messagesHolder, producerAcknowledge), "messagesDistributor")
 
   val messagesSaving = brokerSystem.actorOf(Props(classOf[MessagesSaving], messagesHolder, saveMessagesInterval), "messagesSaving")
   messagesSaving ! Start
 
-  val messagesPropagator = brokerSystem.actorOf(Props(classOf[MessagesPropagator], messagesHolder, messagesDistributor), "messagesPropagator")
+  val messagesPropagator = brokerSystem.actorOf(Props(classOf[MessagesPropagator], messagesHolder, messagesDistributor, maxSentMessagesPerSecond), "messagesPropagator")
   messagesPropagator ! Start
 
-  val connectionAccepter = brokerSystem.actorOf(Props(classOf[ConnectionAccepter], ss, messagesHolder, messagesDistributor), "connectionAccepter")
+  val connectionAccepter = brokerSystem.actorOf(Props(classOf[ConnectionAccepter], ss, messagesHolder, messagesDistributor, producerAcknowledge), "connectionAccepter")
   connectionAccepter ! Start
 
   while(true){

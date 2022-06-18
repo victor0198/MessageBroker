@@ -24,4 +24,4 @@ libraryDependencies ++= Seq(
 )
 libraryDependencies += "org.reactivemongo" % "play2-reactivemongo_3" % "1.1.0-play28-RC4"
 
-Compile / run / mainClass := Some("Broker.MessageBroker")
+Compile / run / mainClass := Some("Producer.Producer")
