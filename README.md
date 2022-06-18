@@ -37,6 +37,7 @@ The main_file_location values are:
 - for messsage broker: Broker.MessageBroker
 - for producer: Producer.Producer
 - for consumer: Consumer.Consumer 
+
 For each main_file_location value, load the sbt changes and compile the project. Then build the image with commands: 
 - ```docker build -t broker:v1 .```
 - ```docker build -t producer:v1 .```
